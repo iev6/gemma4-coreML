@@ -13,35 +13,63 @@ Outputs:
 """
 
 import json
+import sys
+import time
 import traceback
 import torch
+from datetime import datetime
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 MODEL_ID = "google/gemma-4-e2b-it"
 DEVICE = "cpu"  # keep on CPU for tracing; MPS complicates torch.export
 DTYPE = torch.float16
 
+
+def log(msg):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def step(n, total, label):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n[{ts}] ── Step {n}/{total}: {label} ──", flush=True)
+
+
 # ---------------------------------------------------------------------------
-# 1. Load model
+# 1. Load tokenizer
 # ---------------------------------------------------------------------------
-print(f"[1/4] Loading tokenizer + model ({MODEL_ID}) ...")
+step(1, 5, "Load tokenizer")
+log(f"Fetching tokenizer for {MODEL_ID} ...")
+t0 = time.time()
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+log(f"Tokenizer ready ({time.time()-t0:.1f}s)")
+
+# ---------------------------------------------------------------------------
+# 2. Load model  (this is the slow download step)
+# ---------------------------------------------------------------------------
+step(2, 5, "Download + load model weights")
+log("Starting model download — this is the slow step (~10 GB at float16)")
+log("You'll see shard progress from transformers below:")
+print(flush=True)
+
+t0 = time.time()
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
     torch_dtype=DTYPE,
     device_map=DEVICE,
     low_cpu_mem_usage=True,
 )
-model.train(False)  # inference mode — equivalent to model.eval()
-print(f"      Parameters: {sum(p.numel() for p in model.parameters()) / 1e9:.2f}B")
-print(f"      Config:\n{json.dumps(model.config.to_dict(), indent=2, default=str)[:2000]}")
+model.train(False)  # inference mode
+elapsed = time.time() - t0
+param_b = sum(p.numel() for p in model.parameters()) / 1e9
+log(f"Model loaded in {elapsed:.1f}s  |  {param_b:.2f}B parameters")
 
 # ---------------------------------------------------------------------------
-# 2. Print architecture details we care about
+# 3. Print architecture details
 # ---------------------------------------------------------------------------
+step(3, 5, "Inspect architecture config")
 cfg = model.config
-print("\n[2/4] Architecture features of interest:")
-for attr in [
+attrs = [
     "num_hidden_layers",
     "num_attention_heads",
     "num_key_value_heads",
@@ -53,24 +81,27 @@ for attr in [
     "use_per_layer_embeddings",
     "vision_config",
     "audio_config",
-]:
+]
+for attr in attrs:
     val = getattr(cfg, attr, "NOT FOUND")
-    print(f"  {attr}: {val}")
+    log(f"  {attr}: {val}")
 
 # ---------------------------------------------------------------------------
-# 3. Attempt torch.export
+# 4. Attempt torch.export
 # ---------------------------------------------------------------------------
-print("\n[3/4] Attempting torch.export ...")
-
-# Minimal dummy inputs — batch=1, seq=16
-dummy_input = tokenizer("Hello, world!", return_tensors="pt")
-input_ids = dummy_input["input_ids"]  # shape: [1, seq]
+step(4, 5, "torch.export trace")
+log("Building dummy inputs (batch=1, seq=4) ...")
+dummy_input = tokenizer("Hello!", return_tensors="pt")
+input_ids = dummy_input["input_ids"]
 attention_mask = dummy_input["attention_mask"]
+log(f"  input_ids shape: {input_ids.shape}")
 
 export_error = None
 export_tb = None
 export_graph = None
 
+log("Running torch.export.export(strict=False) ...")
+t0 = time.time()
 try:
     with torch.no_grad():
         exported = torch.export.export(
@@ -80,28 +111,25 @@ try:
             strict=False,
         )
     export_graph = exported.graph_module
-    print("  SUCCESS — model exported cleanly")
+    log(f"SUCCESS — export completed in {time.time()-t0:.1f}s")
 except Exception as e:
     export_error = f"{type(e).__name__}: {str(e)}"
     export_tb = traceback.format_exc()
-    print(f"  FAILED (expected): {export_error[:300]}")
+    log(f"FAILED in {time.time()-t0:.1f}s: {export_error[:200]}")
 
 # ---------------------------------------------------------------------------
-# 4. Write report
+# 5. Write report
 # ---------------------------------------------------------------------------
-print("\n[4/4] Writing phase0_trace_report.txt ...")
-with open("phase0_trace_report.txt", "w") as f:
+step(5, 5, "Write report")
+report_path = "phase0_trace_report.txt"
+with open(report_path, "w") as f:
     f.write("# Phase 0 Trace Report — Gemma 4 E2B\n\n")
     f.write(f"Model: {MODEL_ID}\n")
-    f.write(f"dtype: {DTYPE}\n\n")
+    f.write(f"dtype: {DTYPE}\n")
+    f.write(f"Parameters: {param_b:.2f}B\n\n")
 
     f.write("## Config (relevant fields)\n")
-    for attr in [
-        "num_hidden_layers", "num_attention_heads", "num_key_value_heads",
-        "hidden_size", "intermediate_size", "sliding_window",
-        "attention_window_size", "num_kv_shared_layers",
-        "use_per_layer_embeddings",
-    ]:
+    for attr in attrs[:-2]:  # skip vision/audio configs (too verbose)
         f.write(f"  {attr}: {getattr(cfg, attr, 'NOT FOUND')}\n")
 
     if export_graph is not None:
@@ -120,4 +148,5 @@ with open("phase0_trace_report.txt", "w") as f:
         f.write("\n\n### Full traceback:\n")
         f.write(export_tb or "")
 
-print("Done. See phase0_trace_report.txt")
+log(f"Report written to {report_path}")
+log("Phase 0 complete.")
