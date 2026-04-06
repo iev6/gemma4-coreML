@@ -56,6 +56,29 @@ class GemmaTextDecoder(torch.nn.Module):
 
 report_lines = []
 
+
+def patch_bitwise_ops(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
+    """
+    Replace aten.__or__ / aten.__and__ with logical_or / logical_and.
+
+    coremltools' EXIR frontend has no handler for bitwise dunder ops, but does
+    handle logical ops. Gemma 4 uses | and & exclusively on boolean mask tensors
+    (sliding-window + causal mask combination), so the substitution is exact.
+    """
+    replacements = {
+        torch.ops.aten.__or__.Tensor:  torch.ops.aten.logical_or.default,
+        torch.ops.aten.__and__.Tensor: torch.ops.aten.logical_and.default,
+    }
+    graph = gm.graph
+    patched = 0
+    for node in list(graph.nodes):
+        if node.op == "call_function" and node.target in replacements:
+            node.target = replacements[node.target]
+            patched += 1
+    graph.lint()
+    gm.recompile()
+    return gm, patched
+
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
@@ -124,6 +147,10 @@ except Exception as e:
 log("Running .run_decompositions({}) to lower to ATEN dialect ...")
 exported = exported.run_decompositions({})
 log("Dialect lowered to ATEN")
+
+# Patch bitwise ops → logical ops (coremltools has no handler for __or__/__and__)
+exported.graph_module, n = patch_bitwise_ops(exported.graph_module)
+log(f"Patched {n} bitwise op(s) → logical equivalents")
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +248,8 @@ if mlmodel_f32:
         strict=False,
     )
     exported_f16 = exported_f16.run_decompositions({})
-    log("Re-export + dialect lowering for f16 done")
+    exported_f16.graph_module, n = patch_bitwise_ops(exported_f16.graph_module)
+    log(f"Re-export + dialect lowering for f16 done, patched {n} bitwise op(s)")
 
     t0 = time.time()
     try:
