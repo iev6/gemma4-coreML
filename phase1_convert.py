@@ -79,13 +79,8 @@ ids     = dummy["input_ids"].to(DEVICE)       # [1, seq]
 mask    = dummy["attention_mask"].to(DEVICE)  # [1, seq]
 log(f"Dummy input shape: {ids.shape}")
 
-# Mark dim-1 (seq_len) as dynamic so the CoreML model accepts variable lengths
-seq_dim   = torch.export.Dim("seq_len", min=1, max=512)
-dyn_shapes = {
-    "input_ids":      {1: seq_dim},
-    "attention_mask": {1: seq_dim},
-}
-
+# Fixed shapes for Phase 1 — dynamic seq_len deferred to Phase 2
+# (torch.export dynamic_shapes API requires careful kwargs structuring; fixed is fine for validation)
 export_error = None
 exported     = None
 t0 = time.time()
@@ -94,30 +89,19 @@ try:
         model,
         args=(ids,),
         kwargs={"attention_mask": mask, "use_cache": False},
-        dynamic_shapes={"args": ({},), "kwargs": {"attention_mask": {1: seq_dim}, "use_cache": {}}},
         strict=False,
     )
     log(f"torch.export SUCCESS in {time.time()-t0:.1f}s")
 except Exception as e:
-    # Fallback: export without dynamic shapes (fixed seq_len)
     export_error = str(e)
-    log(f"Dynamic export FAILED: {type(e).__name__}: {str(e)[:200]}")
-    log("Retrying with fixed shapes ...")
-    t0 = time.time()
-    try:
-        exported = torch.export.export(
-            model,
-            args=(ids,),
-            kwargs={"attention_mask": mask, "use_cache": False},
-            strict=False,
-        )
-        log(f"Fixed-shape export SUCCESS in {time.time()-t0:.1f}s")
-        export_error = None
-    except Exception as e2:
-        export_error = str(e2)
-        log(f"Fixed export also FAILED: {e2}")
-        save_report()
-        sys.exit(1)
+    log(f"torch.export FAILED: {type(e).__name__}: {str(e)[:300]}")
+    save_report()
+    sys.exit(1)
+
+# Lower TRAINING dialect → ATEN dialect (required by coremltools)
+log("Running .run_decompositions({}) to lower to ATEN dialect ...")
+exported = exported.run_decompositions({})
+log("Dialect lowered to ATEN")
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +201,8 @@ if mlmodel_f32:
         kwargs={"attention_mask": mask, "use_cache": False},
         strict=False,
     )
-    log("Re-export for f16 done")
+    exported_f16 = exported_f16.run_decompositions({})
+    log("Re-export + dialect lowering for f16 done")
 
     t0 = time.time()
     try:
