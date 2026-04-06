@@ -32,6 +32,28 @@ MODEL_ID = "google/gemma-4-e2b-it"
 DEVICE   = "cpu"
 DTYPE    = torch.float32   # export in f32 for first pass; f16 for second
 
+
+class GemmaTextDecoder(torch.nn.Module):
+    """
+    Thin wrapper that hard-codes boolean kwargs so they never appear as
+    graph-level placeholders (which coremltools cannot ingest).
+    - use_cache=False  : no DynamicCache in output
+    - return_dict=False: output is a plain tuple, not a dataclass
+    forward returns logits tensor directly: [batch, seq, vocab_size]
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+            return_dict=False,
+        )
+        return out[0]  # logits: [batch, seq, vocab_size]
+
 report_lines = []
 
 def log(msg):
@@ -66,6 +88,7 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.train(False)
+model = GemmaTextDecoder(model)  # wrap to bake in boolean kwargs
 log(f"Model loaded in {time.time()-t0:.1f}s  — {sum(p.numel() for p in model.parameters())/1e9:.2f}B params")
 
 
@@ -87,8 +110,7 @@ t0 = time.time()
 try:
     exported = torch.export.export(
         model,
-        args=(ids,),
-        kwargs={"attention_mask": mask, "use_cache": False},
+        args=(ids, mask),   # wrapper takes (input_ids, attention_mask) — no bool kwargs
         strict=False,
     )
     log(f"torch.export SUCCESS in {time.time()-t0:.1f}s")
@@ -115,12 +137,9 @@ for n in output_nodes:
 
 # Run one forward pass to check output shapes
 with torch.no_grad():
-    out = model(ids, attention_mask=mask, use_cache=False)
-log(f"Forward pass output type: {type(out)}")
-if hasattr(out, "logits"):
-    log(f"  logits shape: {out.logits.shape}")
-    log(f"  logits dtype: {out.logits.dtype}")
-    log(f"  logits sample (first 5 vocab): {out.logits[0, -1, :5].tolist()}")
+    out = model(ids, mask)   # wrapper returns logits tensor directly
+log(f"Forward pass output shape: {out.shape}, dtype: {out.dtype}")
+log(f"  logits sample (first 5 vocab @ last token): {out[0, -1, :5].tolist()}")
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +213,11 @@ if mlmodel_f32:
         low_cpu_mem_usage=True,
     )
     model_f16.train(False)
+    model_f16 = GemmaTextDecoder(model_f16)
 
     exported_f16 = torch.export.export(
         model_f16,
-        args=(ids,),
-        kwargs={"attention_mask": mask, "use_cache": False},
+        args=(ids, mask),
         strict=False,
     )
     exported_f16 = exported_f16.run_decompositions({})
