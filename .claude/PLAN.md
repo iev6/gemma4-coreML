@@ -52,11 +52,11 @@ A second embedding table alongside the main residual stream. Produces small dedi
 
 ## Implementation Phases
 
-### Phase 0 — Environment + Feasibility (1–2 days)
-- [ ] Install `coremltools >= 8.x`, `transformers`, `torch >= 2.4`
-- [ ] Load `google/gemma-4-e2b-it` from HuggingFace, run a forward pass
-- [ ] Profile which ops `torch.export` traces cleanly vs. what breaks (PLE, shared KV, attention masking)
-- [ ] Decision gate: identify custom ops needing `ct.PassPipeline` patches
+### Phase 0 — Environment + Feasibility ✅ DONE
+- [x] Install coremltools 9.0, transformers 5.5.0, torch 2.11.0 (Python 3.12 venv)
+- [x] Load `google/gemma-4-e2b-it`, run forward pass (5.12B params)
+- [x] `torch.export` trace — **SUCCESS**, 42 standard ATen ops, 5.9s
+- [x] Decision gate: no custom ops needed for export phase; watch `index_put_` during `ct.convert()`
 
 ### Phase 1 — Text-only E2B (1–2 weeks)
 - [ ] Trace decoder with `torch.export.export()`, catching graph breaks
@@ -90,19 +90,23 @@ A second embedding table alongside the main residual stream. Produces small dedi
 
 | Challenge | Difficulty | Notes |
 |---|---|---|
-| PLE custom op | Medium | May fold statically if batch=1 decode |
-| Shared KV cache | Medium | CoreML `StateType` is new but documented |
+| PLE custom op | Medium | `aten.embedding.default` appears per-layer in op list — likely foldable for batch=1 decode |
+| `global_head_dim: 512` | Low | Full-attention KV tensors are double-width vs sliding layers — need separate state shapes |
+| Shared KV cache | Medium | Only 15/35 layers need unique state; 20 share. CoreML `StateType` maps cleanly |
+| `index_put_` in-place op | Low-Medium | CoreML MIL has no in-place ops; coremltools usually lowers this — verify during `ct.convert()` |
+| Dual RoPE (partial_rotary_factor=0.25) | Medium | Global layers only encode 25% of head dims; sliding uses full standard RoPE |
+| `final_logit_softcapping: 30.0` | Low | `tanh(x/30)*30` — standard ops, confirmed in export graph |
 | 128k context window | Hard | Full KV at 128k is GBs; need chunked prefill strategy |
-| MoE routing (26B A4B) | Hard | Expert dispatch not a CoreML primitive |
-| Audio encoder | Deferred | USM Conformer is complex, skip for v1 |
-| Variable aspect ratio | Medium | Fix token budget for CoreML; relax later with dynamic shapes |
+| MoE routing (26B A4B only) | Hard | Not needed for E2B — `enable_moe_block: False` confirmed |
+| Audio encoder | Deferred | USM Conformer, skip for v1 |
+| Variable aspect ratio | Low | `vision_soft_tokens_per_image: 280` already fixed in config — no dynamic shape needed |
 
 ---
 
 ## Tools
 
 ```
-coremltools >= 8.0    # conversion + quantization
+coremltools == 9.0    # conversion + quantization
 torch >= 2.4          # torch.export
 transformers          # model loading from HuggingFace
 Xcode 16+             # ANE profiling, Swift interface generation

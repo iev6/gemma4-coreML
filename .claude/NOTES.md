@@ -64,3 +64,48 @@ uv pip install "torch==2.7.0" "torchvision==0.22.0"
    - `sliding_window` / `attention_window_size` values
    - Whether torch.export succeeds or which op causes the graph break
 4. Based on results, decide which ops need `MLCustomLayer` vs. standard handling
+
+---
+
+## 2026-04-06 — Phase 0 Results
+
+### torch.export: SUCCESS (5.9s, 42 ops, all standard ATen)
+
+### Config is nested under `text_config` (not top-level)
+All architecture fields live at `model.config.text_config`, not `model.config`.
+This is why Phase 0 v1 got all "NOT FOUND" — fixed by dumping `cfg.to_dict()`.
+
+### Key architecture numbers (E2B)
+| Field | Value | CoreML implication |
+|---|---|---|
+| `num_hidden_layers` | 35 | |
+| `num_attention_heads` | 8 | |
+| `num_key_value_heads` | 1 | Extreme GQA — 1 KV head shared across 8 query heads |
+| `head_dim` | 256 | For sliding_attention layers |
+| `global_head_dim` | 512 | For full_attention layers — **double width** |
+| `sliding_window` | 512 | |
+| `num_kv_shared_layers` | 20 | Only 15/35 layers need unique KV caches |
+| `layer_types` | 4×sliding + 1×full, ×7 | Repeating pattern, 35 total |
+| `enable_moe_block` | False | No MoE in E2B — simpler than expected |
+| `final_logit_softcapping` | 30.0 | `tanh(logits/30)*30` at output — confirmed in op list |
+| `partial_rotary_factor` | 0.25 (global only) | Only 25% of head dims get RoPE in full-attention layers |
+
+### KV cache memory budget (revised)
+- Sliding layers (28 unique): head_dim=256, 1 KV head → small
+- Full-attention layers (7 unique, but some shared): global_head_dim=512 → double
+- With `num_kv_shared_layers=20`: only **15 layers** need unique KV state in CoreML
+  - Likely: 7 full-attention layers + 8 sliding-attention layers
+
+### Op list: nothing exotic
+All 42 ops are standard ATen. Two to watch:
+- `aten.index_put_.default` — in-place indexing; CoreML MIL doesn't support in-place. coremltools usually lowers this but verify during ct.convert()
+- `aten.index.Tensor` — dynamic indexing; may need static shapes at conversion time
+
+### PLE (Per-Layer Embeddings)
+`use_per_layer_embeddings` not present as top-level key — PLE may be implemented implicitly via `aten.embedding.default` calls per layer (visible in op list). Check during Phase 1 graph inspection.
+
+### Phase 0 checklist
+- [x] Install coremltools 9.0, transformers 5.5.0, torch 2.11.0
+- [x] Load google/gemma-4-e2b-it, run forward pass
+- [x] torch.export trace — succeeded, 42 standard ops
+- [x] Decision gate: no custom ops needed for export; watch index_put_ during ct.convert()

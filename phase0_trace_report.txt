@@ -1,0 +1,198 @@
+# Phase 0 Trace Report — Gemma 4 E2B
+
+Model: google/gemma-4-e2b-it
+dtype: torch.float16
+Parameters: 5.12B
+
+## Config (all fields)
+  _name_or_path: google/gemma-4-e2b-it
+  architectures: ['Gemma4ForConditionalGeneration']
+  audio_token_id: 258881
+  boa_token_id: 256000
+  boi_token_id: 255999
+  chunk_size_feed_forward: 0
+  dtype: float16
+  eoa_token_id: 258883
+  eoa_token_index: 258883
+  eoi_token_id: 258882
+  eos_token_id: [1, 106]
+  image_token_id: 258880
+  initializer_range: 0.02
+  is_encoder_decoder: False
+  model_type: gemma4
+  output_attentions: False
+  output_hidden_states: False
+  problem_type: None
+  return_dict: True
+  tie_word_embeddings: True
+  transformers_version: 5.5.0
+  video_token_id: 258884
+  vision_soft_tokens_per_image: 280
+
+  [nested] audio_config:
+    architectures: None
+    output_hidden_states: False
+    return_dict: True
+    dtype: float16
+    chunk_size_feed_forward: 0
+    is_encoder_decoder: False
+    id2label: {0: 'LABEL_0', 1: 'LABEL_1'}
+    label2id: {'LABEL_0': 0, 'LABEL_1': 1}
+    problem_type: None
+    hidden_size: 1024
+    num_hidden_layers: 12
+    num_attention_heads: 8
+    hidden_act: silu
+    subsampling_conv_channels: [128, 32]
+    conv_kernel_size: 5
+    residual_weight: 0.5
+    attention_chunk_size: 12
+    attention_context_left: 13
+    attention_context_right: 0
+    attention_logit_cap: 50.0
+    attention_invalid_logits_value: -1000000000.0
+    use_clipped_linears: True
+    rms_norm_eps: 1e-06
+    gradient_clipping: 10000000000.0
+    output_proj_dims: 1536
+    initializer_range: 0.02
+    _name_or_path: 
+    model_type: gemma4_audio
+    output_attentions: False
+
+  [nested] id2label:
+    0: LABEL_0
+    1: LABEL_1
+
+  [nested] label2id:
+    LABEL_0: 0
+    LABEL_1: 1
+
+  [nested] text_config:
+    architectures: None
+    output_hidden_states: False
+    return_dict: True
+    dtype: float16
+    chunk_size_feed_forward: 0
+    is_encoder_decoder: False
+    id2label: {0: 'LABEL_0', 1: 'LABEL_1'}
+    label2id: {'LABEL_0': 0, 'LABEL_1': 1}
+    problem_type: None
+    vocab_size: 262144
+    hidden_size: 1536
+    intermediate_size: 6144
+    num_hidden_layers: 35
+    num_attention_heads: 8
+    num_key_value_heads: 1
+    head_dim: 256
+    hidden_activation: gelu_pytorch_tanh
+    max_position_embeddings: 131072
+    initializer_range: 0.02
+    rms_norm_eps: 1e-06
+    use_cache: True
+    pad_token_id: 0
+    eos_token_id: 1
+    bos_token_id: 2
+    tie_word_embeddings: True
+    rope_parameters: {'full_attention': {'partial_rotary_factor': 0.25, 'rope_theta': 1000000.0, 'rope_type': 'proportional'}, 'sliding_attention': {'rope_theta': 10000.0, 'rope_type': 'default'}}
+    attention_bias: False
+    attention_dropout: 0.0
+    sliding_window: 512
+    layer_types: ['sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention']
+    final_logit_softcapping: 30.0
+    use_bidirectional_attention: None
+    vocab_size_per_layer_input: 262144
+    hidden_size_per_layer_input: 256
+    num_global_key_value_heads: None
+    global_head_dim: 512
+    attention_k_eq_v: False
+    num_kv_shared_layers: 20
+    enable_moe_block: False
+    use_double_wide_mlp: True
+    num_experts: None
+    top_k_experts: None
+    moe_intermediate_size: None
+    _name_or_path: 
+    expert_intermediate_size: None
+    model_type: gemma4_text
+    output_attentions: False
+
+  [nested] vision_config:
+    architectures: None
+    output_hidden_states: False
+    return_dict: True
+    dtype: float16
+    chunk_size_feed_forward: 0
+    is_encoder_decoder: False
+    id2label: {0: 'LABEL_0', 1: 'LABEL_1'}
+    label2id: {'LABEL_0': 0, 'LABEL_1': 1}
+    problem_type: None
+    hidden_size: 768
+    intermediate_size: 3072
+    num_hidden_layers: 16
+    num_attention_heads: 12
+    num_key_value_heads: 12
+    head_dim: 64
+    hidden_activation: gelu_pytorch_tanh
+    rms_norm_eps: 1e-06
+    max_position_embeddings: 131072
+    attention_bias: False
+    attention_dropout: 0.0
+    rope_parameters: {'rope_theta': 100.0, 'rope_type': 'default'}
+    pooling_kernel_size: 3
+    patch_size: 16
+    position_embedding_size: 10240
+    use_clipped_linears: True
+    standardize: False
+    initializer_range: 0.02
+    _name_or_path: 
+    default_output_length: 280
+    global_head_dim: 64
+    model_type: gemma4_vision
+    output_attentions: False
+
+## torch.export result: SUCCESS
+
+Unique ops (42):
+  aten.__and__.Tensor
+  aten.__or__.Tensor
+  aten._assert_tensor_metadata.default
+  aten.add.Tensor
+  aten.alias.default
+  aten.arange.default
+  aten.cat.default
+  aten.clone.default
+  aten.cos.default
+  aten.div.Tensor
+  aten.embedding.default
+  aten.eq.Scalar
+  aten.expand.default
+  aten.gelu.default
+  aten.gt.Tensor
+  aten.index.Tensor
+  aten.index_put_.default
+  aten.le.Tensor
+  aten.lift_fresh_copy.default
+  aten.linear.default
+  aten.matmul.default
+  aten.mean.dim
+  aten.mul.Tensor
+  aten.mul_.Tensor
+  aten.neg.default
+  aten.new_ones.default
+  aten.pow.Tensor_Scalar
+  aten.reshape.default
+  aten.scaled_dot_product_attention.default
+  aten.select.int
+  aten.sin.default
+  aten.slice.Tensor
+  aten.sub.Tensor
+  aten.tanh.default
+  aten.to.device
+  aten.to.dtype
+  aten.to.dtype_layout
+  aten.transpose.int
+  aten.type_as.default
+  aten.unsqueeze.default
+  aten.view.default
+  aten.where.self
