@@ -150,28 +150,9 @@ log("Model freed from memory before conversion")
 # ---------------------------------------------------------------------------
 step(3, 4, "ct.convert() — FLOAT16")
 
-# Monkey-patch coremltools bug: _cast_bool_attn_mask does mb.sub(x=1.0, y=fp16_mask)
-# where 1.0 is hardcoded fp32 but mask is fp16 when compute_precision=FLOAT16.
-# Fix: cast mask to fp32 before subtraction, then cast result back to query dtype.
-# IMPORTANT: use _orig.__globals__['mb'] — same Builder reference as ops.py uses.
-# Using a separately imported Builder would be a different object and ops would
-# be built into the wrong context.
-import coremltools.converters.mil.frontend.torch.ops as _ct_ops
-
-_orig_cast_bool = _ct_ops._cast_bool_attn_mask
-
-def _patched_cast_bool_attn_mask(mask, q):
-    _mb = _orig_cast_bool.__globals__['mb']   # same Builder instance ops.py uses
-    mask_f32      = _mb.cast(x=mask, dtype="fp32")
-    complement    = _mb.sub(x=1.0, y=mask_f32)   # both fp32 — no dtype mismatch
-    additive_mask = _mb.mul(x=complement, y=float("-inf"))
-    return _mb.cast(x=additive_mask, dtype=q.dtype)  # cast back to query dtype (fp16)
-
-_ct_ops._cast_bool_attn_mask = _patched_cast_bool_attn_mask
-# Verify patch is live
-assert _ct_ops._cast_bool_attn_mask is _patched_cast_bool_attn_mask, "patch failed"
-log("Applied coremltools SDPA bool-mask dtype fix (using ops.py Builder globals)")
-
+# Note: coremltools _cast_bool_attn_mask bug fixed directly in venv source (ops.py line 8891)
+# Bug: mb.sub(x=1.0, y=fp16_mask) — 1.0 hardcoded fp32 vs fp16 mask under FLOAT16 precision
+# Fix: cast 1.0 to match mask dtype via mb.cast before subtraction
 log("Starting CoreML conversion ...")
 t0 = time.time()
 try:
