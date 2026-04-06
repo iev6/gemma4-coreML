@@ -26,6 +26,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 MODEL_ID = "google/gemma-4-e2b-it"
 DEVICE   = "cpu"
 
+# Strategy: export in fp32, convert with compute_precision=FLOAT16.
+# Exporting in fp16 causes dtype mismatches on fp32 literals inside coremltools'
+# SDPA decomposer (_cast_bool_attn_mask, _decompose_scaled_dot_product_attention).
+# The correct coremltools workflow is fp32 export → FLOAT16 compute precision,
+# which inserts casts internally and avoids literal dtype issues.
+
 report_lines = []
 
 def log(msg):
@@ -112,19 +118,19 @@ def patch_for_coreml(gm: torch.fx.GraphModule) -> dict:
 # ---------------------------------------------------------------------------
 # 1. Load in float16 from scratch — no f32 model in memory
 # ---------------------------------------------------------------------------
-step(1, 4, "Load model in float16")
+step(1, 4, "Load model in float32")
 t0 = time.time()
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 model_raw = AutoModelForCausalLM.from_pretrained(
     MODEL_ID,
-    dtype=torch.float16,
+    dtype=torch.float32,   # fp32 export avoids coremltools SDPA literal dtype bugs
     device_map=DEVICE,
     low_cpu_mem_usage=True,
 )
 model_raw.train(False)
 model = GemmaTextDecoder(model_raw)
 param_b = sum(p.numel() for p in model.parameters()) / 1e9
-log(f"Loaded in {time.time()-t0:.1f}s  —  {param_b:.2f}B params  —  dtype=float16")
+log(f"Loaded in {time.time()-t0:.1f}s  —  {param_b:.2f}B params  —  dtype=float32")
 
 # ---------------------------------------------------------------------------
 # 2. Export + patch
@@ -165,6 +171,8 @@ try:
         outputs=[
             ct.TensorType(name="logits", dtype=np.float16),
         ],
+        # fp32 exported model + FLOAT16 compute precision = coremltools inserts
+        # its own fp16 casts, avoiding SDPA literal dtype bugs from fp16 export
         compute_precision=ct.precision.FLOAT16,
         compute_units=ct.ComputeUnit.ALL,
         minimum_deployment_target=ct.target.macOS15,
