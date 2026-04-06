@@ -57,13 +57,17 @@ class GemmaTextDecoder(torch.nn.Module):
 report_lines = []
 
 
-def patch_bitwise_ops(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
+def patch_bitwise_ops(gm: torch.fx.GraphModule) -> int:
     """
     Replace aten.__or__ / aten.__and__ with logical_or / logical_and.
 
     coremltools' EXIR frontend has no handler for bitwise dunder ops, but does
     handle logical ops. Gemma 4 uses | and & exclusively on boolean mask tensors
     (sliding-window + causal mask combination), so the substitution is exact.
+
+    Modifies gm in-place. Returns count of patched nodes.
+    NOTE: exported.graph_module is a read-only property — do NOT try to reassign
+    it; pass the reference directly and rely on in-place mutation.
     """
     replacements = {
         torch.ops.aten.__or__.Tensor:  torch.ops.aten.logical_or.default,
@@ -77,7 +81,7 @@ def patch_bitwise_ops(gm: torch.fx.GraphModule) -> torch.fx.GraphModule:
             patched += 1
     graph.lint()
     gm.recompile()
-    return gm, patched
+    return patched
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -149,7 +153,7 @@ exported = exported.run_decompositions({})
 log("Dialect lowered to ATEN")
 
 # Patch bitwise ops → logical ops (coremltools has no handler for __or__/__and__)
-exported.graph_module, n = patch_bitwise_ops(exported.graph_module)
+n = patch_bitwise_ops(exported.graph_module)  # modifies in-place; graph_module is read-only property
 log(f"Patched {n} bitwise op(s) → logical equivalents")
 
 
@@ -248,7 +252,7 @@ if mlmodel_f32:
         strict=False,
     )
     exported_f16 = exported_f16.run_decompositions({})
-    exported_f16.graph_module, n = patch_bitwise_ops(exported_f16.graph_module)
+    n = patch_bitwise_ops(exported_f16.graph_module)
     log(f"Re-export + dialect lowering for f16 done, patched {n} bitwise op(s)")
 
     t0 = time.time()
