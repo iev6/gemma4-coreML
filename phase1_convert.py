@@ -57,31 +57,61 @@ class GemmaTextDecoder(torch.nn.Module):
 report_lines = []
 
 
-def patch_bitwise_ops(gm: torch.fx.GraphModule) -> int:
+def patch_for_coreml(gm: torch.fx.GraphModule) -> dict:
     """
-    Replace aten.__or__ / aten.__and__ with logical_or / logical_and.
+    Pre-conversion graph surgery: replace/remove all ATen ops that coremltools 9.0
+    EXIR frontend does not support. Verified against coremltools individually.
 
-    coremltools' EXIR frontend has no handler for bitwise dunder ops, but does
-    handle logical ops. Gemma 4 uses | and & exclusively on boolean mask tensors
-    (sliding-window + causal mask combination), so the substitution is exact.
+    Ops patched (with reason):
+      __or__  → logical_or   : bitwise dunder has no EXIR handler; logical equiv for bool masks
+      __and__ → logical_and  : same
+      new_ones → full        : new_ones has no EXIR handler; full(size,1,dtype) is identical
+      alias   → input        : alias is a no-op identity; replace uses with input directly
 
-    Modifies gm in-place. Returns count of patched nodes.
-    NOTE: exported.graph_module is a read-only property — do NOT try to reassign
-    it; pass the reference directly and rely on in-place mutation.
+    All modifications are in-place on gm.graph.
+    NOTE: exported.graph_module is read-only — pass the reference, do not reassign.
+    Returns dict of {patch_name: count}.
     """
-    replacements = {
-        torch.ops.aten.__or__.Tensor:  torch.ops.aten.logical_or.default,
-        torch.ops.aten.__and__.Tensor: torch.ops.aten.logical_and.default,
-    }
     graph = gm.graph
-    patched = 0
+    counts: dict = {}
+
     for node in list(graph.nodes):
-        if node.op == "call_function" and node.target in replacements:
-            node.target = replacements[node.target]
-            patched += 1
+        if node.op != "call_function":
+            continue
+
+        # 1. Bitwise → logical (bool masks in sliding-window + causal mask logic)
+        if node.target == torch.ops.aten.__or__.Tensor:
+            node.target = torch.ops.aten.logical_or.default
+            counts["__or__→logical_or"] = counts.get("__or__→logical_or", 0) + 1
+
+        elif node.target == torch.ops.aten.__and__.Tensor:
+            node.target = torch.ops.aten.logical_and.default
+            counts["__and__→logical_and"] = counts.get("__and__→logical_and", 0) + 1
+
+        # 2. new_ones(self, size) → full(size, 1, dtype=inferred)
+        elif node.target == torch.ops.aten.new_ones.default:
+            _, size = node.args[0], node.args[1]
+            dtype = node.meta["val"].dtype if "val" in node.meta else torch.float32
+            with graph.inserting_before(node):
+                full_node = graph.call_function(
+                    torch.ops.aten.full.default,
+                    args=(size, 1),
+                    kwargs={"dtype": dtype},
+                )
+                full_node.meta = dict(node.meta)
+            node.replace_all_uses_with(full_node)
+            graph.erase_node(node)
+            counts["new_ones→full"] = counts.get("new_ones→full", 0) + 1
+
+        # 3. alias → identity (alias is a storage alias with no compute; safe to unwrap)
+        elif node.target == torch.ops.aten.alias.default:
+            node.replace_all_uses_with(node.args[0])
+            graph.erase_node(node)
+            counts["alias→identity"] = counts.get("alias→identity", 0) + 1
+
     graph.lint()
     gm.recompile()
-    return patched
+    return counts
 
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -152,9 +182,9 @@ log("Running .run_decompositions({}) to lower to ATEN dialect ...")
 exported = exported.run_decompositions({})
 log("Dialect lowered to ATEN")
 
-# Patch bitwise ops → logical ops (coremltools has no handler for __or__/__and__)
-n = patch_bitwise_ops(exported.graph_module)  # modifies in-place; graph_module is read-only property
-log(f"Patched {n} bitwise op(s) → logical equivalents")
+# Patch all known unsupported ops for coremltools (in-place; graph_module is read-only property)
+patch_counts = patch_for_coreml(exported.graph_module)
+log(f"Patched ops: {patch_counts}")
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +282,8 @@ if mlmodel_f32:
         strict=False,
     )
     exported_f16 = exported_f16.run_decompositions({})
-    n = patch_bitwise_ops(exported_f16.graph_module)
-    log(f"Re-export + dialect lowering for f16 done, patched {n} bitwise op(s)")
+    f16_counts = patch_for_coreml(exported_f16.graph_module)
+    log(f"Re-export + dialect lowering for f16 done, patches: {f16_counts}")
 
     t0 = time.time()
     try:
