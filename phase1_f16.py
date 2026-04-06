@@ -149,6 +149,22 @@ log("Model freed from memory before conversion")
 # 3. ct.convert() — FLOAT16
 # ---------------------------------------------------------------------------
 step(3, 4, "ct.convert() — FLOAT16")
+
+# Monkey-patch coremltools bug: _cast_bool_attn_mask does mb.sub(x=1.0, y=fp16_mask)
+# where 1.0 is hardcoded fp32 but mask is fp16 when compute_precision=FLOAT16.
+# Fix: cast mask to fp32 before subtraction, then cast result back to query dtype.
+import coremltools.converters.mil.frontend.torch.ops as _ct_ops
+from coremltools.converters.mil import Builder as mb
+
+def _patched_cast_bool_attn_mask(mask, q):
+    mask_f32       = mb.cast(x=mask, dtype="fp32")
+    complement     = mb.sub(x=1.0, y=mask_f32)          # both fp32, no mismatch
+    additive_mask  = mb.mul(x=complement, y=float("-inf"))
+    return mb.cast(x=additive_mask, dtype=q.dtype)       # back to query dtype (fp16)
+
+_ct_ops._cast_bool_attn_mask = _patched_cast_bool_attn_mask
+log("Applied coremltools SDPA bool-mask dtype fix")
+
 log("Starting CoreML conversion ...")
 t0 = time.time()
 try:
