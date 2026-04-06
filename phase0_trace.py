@@ -65,26 +65,21 @@ param_b = sum(p.numel() for p in model.parameters()) / 1e9
 log(f"Model loaded in {elapsed:.1f}s  |  {param_b:.2f}B parameters")
 
 # ---------------------------------------------------------------------------
-# 3. Print architecture details
+# 3. Inspect architecture config — dump all real keys
 # ---------------------------------------------------------------------------
 step(3, 5, "Inspect architecture config")
 cfg = model.config
-attrs = [
-    "num_hidden_layers",
-    "num_attention_heads",
-    "num_key_value_heads",
-    "hidden_size",
-    "intermediate_size",
-    "sliding_window",
-    "attention_window_size",
-    "num_kv_shared_layers",
-    "use_per_layer_embeddings",
-    "vision_config",
-    "audio_config",
-]
-for attr in attrs:
-    val = getattr(cfg, attr, "NOT FOUND")
-    log(f"  {attr}: {val}")
+cfg_dict = cfg.to_dict()
+
+log("Full config dump:")
+for k, v in sorted(cfg_dict.items()):
+    if not isinstance(v, dict):
+        log(f"  {k}: {v}")
+for k, v in sorted(cfg_dict.items()):
+    if isinstance(v, dict):
+        log(f"  [nested] {k}: {list(v.keys())}")
+
+attrs = sorted(cfg_dict.keys())
 
 # ---------------------------------------------------------------------------
 # 4. Attempt torch.export
@@ -100,14 +95,15 @@ export_error = None
 export_tb = None
 export_graph = None
 
-log("Running torch.export.export(strict=False) ...")
+log("Running torch.export.export(strict=False, use_cache=False) ...")
+log("  use_cache=False: avoids DynamicCache in outputs (not a registered pytree)")
 t0 = time.time()
 try:
     with torch.no_grad():
         exported = torch.export.export(
             model,
             args=(input_ids,),
-            kwargs={"attention_mask": attention_mask},
+            kwargs={"attention_mask": attention_mask, "use_cache": False},
             strict=False,
         )
     export_graph = exported.graph_module
@@ -128,9 +124,15 @@ with open(report_path, "w") as f:
     f.write(f"dtype: {DTYPE}\n")
     f.write(f"Parameters: {param_b:.2f}B\n\n")
 
-    f.write("## Config (relevant fields)\n")
-    for attr in attrs[:-2]:  # skip vision/audio configs (too verbose)
-        f.write(f"  {attr}: {getattr(cfg, attr, 'NOT FOUND')}\n")
+    f.write("## Config (all fields)\n")
+    for k, v in sorted(cfg_dict.items()):
+        if not isinstance(v, dict):
+            f.write(f"  {k}: {v}\n")
+    for k, v in sorted(cfg_dict.items()):
+        if isinstance(v, dict):
+            f.write(f"\n  [nested] {k}:\n")
+            for kk, vv in v.items():
+                f.write(f"    {kk}: {vv}\n")
 
     if export_graph is not None:
         f.write("\n## torch.export result: SUCCESS\n")
